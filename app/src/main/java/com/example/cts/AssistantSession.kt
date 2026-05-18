@@ -45,37 +45,65 @@ class AssistantSession(context: Context) : VoiceInteractionSession(context) {
         try {
             FileOutputStream(file).use { stream ->
                 bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
+                stream.flush()
             }
         } catch (e: IOException) {
             e.printStackTrace()
+            return
         }
 
         val contentUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         
-        val lensIntent = Intent("com.google.lens.intent.action.LENS_INPUT").apply {
-            setData(contentUri)
-            setPackage("com.google.android.googlequicksearchbox")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
+        // Try multiple potential packages for Google Lens
+        val packages = listOf("com.google.android.googlequicksearchbox", "com.google.ar.lens")
+        var success = false
         
-        try {
-            startIntent(lensIntent)
-        } catch (e: Exception) {
-            val sendIntent = Intent(Intent.ACTION_SEND).apply {
-                type = "image/png"
-                putExtra(Intent.EXTRA_STREAM, contentUri)
-                setPackage("com.google.android.googlequicksearchbox")
+        for (pkg in packages) {
+            val lensIntent = Intent("com.google.lens.intent.action.LENS_INPUT").apply {
+                setData(contentUri)
+                setPackage(pkg)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
+            
             try {
-                startIntent(sendIntent)
-            } catch (e2: Exception) {
-                val shareIntent = Intent.createChooser(sendIntent, "Search with...")
-                shareIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                startIntent(shareIntent)
+                // Explicitly grant permission for more stability
+                context.grantUriPermission(pkg, contentUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                startIntent(lensIntent)
+                success = true
+                break
+            } catch (e: Exception) {
+                // Continue to next package or fallback
             }
+        }
+
+        if (!success) {
+            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "image/png"
+                putExtra(Intent.EXTRA_STREAM, contentUri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            
+            try {
+                sendIntent.setPackage("com.google.android.googlequicksearchbox")
+                context.grantUriPermission("com.google.android.googlequicksearchbox", contentUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                startIntent(sendIntent)
+            } catch (e: Exception) {
+                try {
+                    sendIntent.setPackage(null)
+                    val shareIntent = Intent.createChooser(sendIntent, "Search with...")
+                    shareIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startIntent(shareIntent)
+                } catch (e2: Exception) {
+                    e2.printStackTrace()
+                }
+            }
+        }
+        
+        // Free bitmap memory
+        if (!bitmap.isRecycled) {
+            bitmap.recycle()
         }
     }
 }
